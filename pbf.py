@@ -195,16 +195,12 @@ def run():
     # p_right_wall = jittered_grid(3, 20, dx, 0.0) + [10 * dx , 0.0]
     # p = np.concatenate((p, p_right_wall))
 
-    # Compliance (inverse stiffness)
-    k = 1.0e-6
-    alpha = 1.0 / k
-
-
     rho0 = 1.0
     # Mass of the particles to match the density with the particle spacing
     m = rho0 * dx * dx
 
-
+    # Storage of lambdas (1 per active particle)
+    lambdas = np.zeros(num_active_particles)
 
     
     g = 9.8
@@ -229,10 +225,7 @@ def run():
 
     time = 0
 
-    for simulationStep in range(30):
-        # Lagrange Storage of lambdas (1 per active particle)
-        lambdas = np.zeros(num_active_particles)
-        
+    for simulationStep in range(20):
         time += deltaT
 
         v = updateVelocity(v, f, deltaT, m)
@@ -246,18 +239,31 @@ def run():
         for i in range(num_active_particles):
             neighbors.append(get_neighbors(i, pstar, grid, h))
 
-        niter = 50
+        # # print(neighbors)
+        # neighbors2 = []
+        # for i in range(num_active_particles):
+        #     js = getNeighborsWithinDistance(i, pstar, h)
+        #     neighbors2.append(js)
 
-        # For each solver iteration,
+        niter = 30
         for solverIter in range(niter):
+            deltap = np.zeros_like(p)
             avgAbsCi = 0
 
-            # For each constraint,
             for i in range(num_active_particles):
+
+                # js = [neighbors[i, j] for j in range(30) if distances[i, j] < h and distances[i,j] > 0.0]
                 js = neighbors[i]
+                # js.sort()
+                # jun = np.all(js == neighbors2[i])
+                # if (not jun):
+                #     print(i)
+                #     print(js)
+                #     print(neighbors2[i])
+                #     raise KeyError
+
                 
-                # ---
-                # Calculate delta in lagrange multiplier
+                # For each particle, calculate lagrange multiplier
                 pi = pstar[i, :]
                 pjs = pstar[js,:]
 
@@ -271,75 +277,36 @@ def run():
                 normSqed += np.dot(gradici, gradici)
                 for grad in gradjci:
                     normSqed += np.dot(grad,grad)
+                eps = 1.0e-6
+                lambdas[i] = -ci / (normSqed + eps)
 
-                # delta lambda for this constraint
-                dlambda = (-ci - alpha * lambdas[i]) / (1 / m * normSqed + alpha)
+            deltap = np.zeros_like(p)
+
+            for i in range(num_active_particles):
+                # js = [neighbors[i, j] for j in range(30) if distances[i, j] < h and distances[i,j] > 0.0]
+                js = np.asarray(neighbors[i])
+
+                pi = pstar[i, :]
+                pjs = pstar[js,:]
+
+                lambdai = lambdas[i]
+                mask = js < num_active_particles           # only valid neighbors
+
+                lambdajs = np.zeros(js.shape, dtype=float)
+                lambdajs[mask] = lambdas[js[mask]]         # safe: all indices in bounds
 
 
-                # apply delta x to all neighbors of this constraint based on incremental delta lambda
-                pstar[i, :] += 1 / m * gradici * dlambda
+                rji = pi - pjs
+                r = np.linalg.norm(rji, axis=1)
+                gradW = dspikey_2D(r, h)[:, None] * rji / r[:,None]
 
 
-
-
-
-
-                # -- 
-                # Artifical pressure term
-                # We calculate the contribution to all the neighbors to follow the pattern set 
-                # by the lambda_j contributions.  We calculate pj - pi to reflect this change
-                rij = pjs - pi 
-                r = np.linalg.norm(rij, axis=1)
-
+                # Calculate artificial pressure term
                 k = 0.001
                 q = 0.2 * h
                 n = 4
                 scorr = -k * np.pow((poly6_2D(r, h) / poly6_2D(q, h)), n)
-
-                pstar[js, :] += 1 / m * gradjci * (dlambda + scorr[:, None])
-                # i can probably sum  the contributions to my neighgbors or go the other way around again
-                # (if i flip r), or sum  into myself by flipping the graidents
-                # for (j, gradj) in zip(js, gradjci):
-                #     # Add articial pressure term to neighbors
-                #     k = 0.001
-                #     q = 0.2 * h
-                #     n = 4
-                #     scorr = -k * np.pow((poly6_2D(r, h) / poly6_2D(q, h)), n)
-
-                #     pstar[j, :] += 1 / m * gradj * (dlambda + scorr)
-
-
-                lambdas[i] += dlambda
-
-                # Artificial pressure?
-
-            # deltap = np.zeros_like(p)
-
-            # for i in range(num_active_particles):
-            #     # js = [neighbors[i, j] for j in range(30) if distances[i, j] < h and distances[i,j] > 0.0]
-            #     js = np.asarray(neighbors[i])
-
-            #     pi = pstar[i, :]
-            #     pjs = pstar[js,:]
-
-            #     lambdai = lambdas[i]
-            #     mask = js < num_active_particles           # only valid neighbors
-
-            #     lambdajs = np.zeros(js.shape, dtype=float)
-            #     lambdajs[mask] = lambdas[js[mask]]         # safe: all indices in bounds
-
-
-            #     rji = pi - pjs
-            #     r = np.linalg.norm(rji, axis=1)
-            #     gradW = dspikey_2D(r, h)[:, None] * rji / r[:,None]
-
-
-            #     # Calculate artificial pressure term
-            #     k = 0.001
-            #     q = 0.2 * h
-            #     n = 4
-            #     scorr = -k * np.pow((poly6_2D(r, h) / poly6_2D(q, h)), n)
-            #     deltap[i , :] = (m / rho0 * (lambdai + lambdajs[:,None] + scorr[:,None]) * gradW).sum(axis=0)
+                deltap[i , :] = (m / rho0 * (lambdai + lambdajs[:,None] + scorr[:,None]) * gradW).sum(axis=0)
 
 
                 # for j in js:
@@ -359,9 +326,8 @@ def run():
                 #     deltap[i,:] += m / rho0 * (lambdai + lambdaj + scorr) * gradW
 
             # Note - I'm not sure if I need this under-relaxation term
-            # pstar += 0.1 * deltap
+            pstar += 0.1 * deltap
             avgAbsCi /= num_active_particles
-            print(avgAbsCi)
             # print(avgAbsCi)
         # Update velocity
         v = (pstar - p) / deltaT
@@ -372,7 +338,7 @@ def run():
 
         # Apply vorticity confinement and XSPH viscosity
         # XSPH Viscosity 
-        c = 0.0001
+        c = 0.01
         vcorrections = np.zeros_like(v)
         for i in range(num_active_particles):
             # js = [neighbors[i, j] for j in range(30) if distances[i, j] < h and distances[i,j] > 0.0]
