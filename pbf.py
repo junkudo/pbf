@@ -7,17 +7,11 @@ from collections import defaultdict
 
 
 def poly6_2D(r : float, h : float):
-
     return np.where((r > h), 0.0, 4.0 / (np.pi * np.power(h,8)) * np.power(h*h - r*r, 3))
 
-
 def spiky_2D(r : float, h : float):
-    if r > h:
-        return 0.0
     C = 10.0 / (np.pi * np.power(h, 5))
-    return C * np.power((h - r), 3)
-
-
+    return np.where((r > h), 0.0, C * np.power((h - r), 3))
 
 def dspikey_2D(r, h):
     r = np.asarray(r)
@@ -28,15 +22,6 @@ def dspikey_2D(r, h):
 
     # Zero out invalid regions (r <= 0 or r > h)
     return np.where((r <= 0.0) | (r > h), 0.0, dwdr)
-
-# def grad_spiky_2D(r_vec : np.ndarray, h : float):
-#     r = np.linalg.norm(r_vec)
-#     if r <= 0.0 or r > h:
-#         return np.zeros_like(r_vec)
-#     C = 10.0 / (np.pi * np.power(h,5))
-#     dwdr = -3.0 * C * np.power((h-r), 2)
-#     return dwdr * r_vec / r
-
 
 @profile
 def sphDensity2D(pi  : np.ndarray,  # shape (d)
@@ -92,8 +77,6 @@ def constraintGradient(pi : np.ndarray,
     # grad_j = - grad_rij W()
     rij = pi - pjs
     r = np.linalg.norm(rij, axis=1)
-
-
     gradient_i = (dkernel_func(r, h)[:, None] * m / rho0 * rij / r[:, None]).sum(axis = 0)
     gradient_i *= 1.0 / rho0
 
@@ -121,71 +104,6 @@ def jittered_grid(nx, ny, h, jitter=0.2):
     pos += (np.random.rand(*pos.shape) - 0.5) * h * jitter
     return pos
 
-def testConstraintGradient():
-    dim = 2
-    num_particles_x = 5
-    num_particles_y = 5
-    num_particles = num_particles_x * num_particles_y
-    # Initialize a 2D matrix of random positions
-    # Particle spacing
-    dx = 1.0
-    # Kernel size to ensure that the particles have enough neighbors to compute properties
-    h = 1.8 * dx
-    p = jittered_grid(num_particles_x, num_particles_y, dx, dx * 0.05)
-
-    rho0 = 1.0
-    # Mass of the particles to match the density with the particle spacing
-    m = rho0 * dx * dx * np.random.rand(num_particles)
-
-
-    for i in range(p.shape[0]):
-        js = getNeighborsWithinDistance(i, p, h)
-
-        # For each particle, calculate lagrange multiplier
-        pi = p[i, :]
-        pjs = p[js,:]
-
-
-
-        
-        [dcdpi, dcdpj] = constraintGradient(pi, pjs, rho0, m, h, dspikey_2D)
-
-        # Test the gradient with respect to pi
-
-        dcdp_numerical = np.zeros_like(pi)
-
-        for d in range(len(pi)):
-            eps = 1.0e-6
-            pi_plus = pi.copy()
-            pi_minus = pi.copy()
-            pi_plus[d] += eps
-            pi_minus[d] -= eps
-            c_plus = incompressibilityConstraint(pi_plus, pjs, rho0, m, h, spiky_2D)
-            c_minus = incompressibilityConstraint(pi_minus, pjs, rho0, m, h, spiky_2D)
-            dcdp = (c_plus - c_minus) / (2.0 * eps)
-            dcdp_numerical[d] = dcdp
-        assert np.allclose(dcdp_numerical, dcdpi)
-
-        dcdpj_numerical = np.zeros_like(pjs)
-        
-        for k in range(len(pjs)):
-            for d in range(pjs.shape[1]):
-                pjs_plus = pjs.copy()
-                pjs_minus = pjs.copy()
-                eps = 1.0e-6
-                pjs_plus[k, d] += eps
-                pjs_minus[k, d] -= eps
-                c_plus = incompressibilityConstraint(pi, pjs_plus, rho0, m, h, spiky_2D)
-                c_minus = incompressibilityConstraint(pi, pjs_minus, rho0, m, h, spiky_2D)            
-                dcdp = (c_plus - c_minus) / (2.0 * eps)
-                dcdpj_numerical[k, d] = dcdp
-
-        assert np.allclose(dcdpj_numerical, dcdpj)
-
-
-
-    # print(incompressibilityConstraint(pi, pjs, rho0, m, h, poly6_2D))
-    # print(constraintGradient(pi, pjs, rho0, m, h, grad_spiky_2D))
 def calculateGravity2D(p, m : float, g : float):
     # We are assuming gravity in 2D is of the form (0.0, -g)
     f = np.zeros_like(p)
