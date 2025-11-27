@@ -53,50 +53,68 @@ def test_constraint_gradient():
     m = rho0 * dx * dx
 
 
-    for i in range(p.shape[0]):
-
+    for i in range(num_particles):
         js = pbf.getNeighborsWithinDistance(i, p, h)
-
         # For each particle, calculate lagrange multiplier
-        pi = p[i, :]
-        pjs = p[js,:]
-        print(np.shape(pjs))
-
-        [dcdpi, dcdpj] = pbf.constraintGradient(pi, pjs, rho0, m, h, pbf.dspikey_2D)
+        dcdpj = pbf.constraintGradient(i, js, p, rho0, m, h, pbf.dspikey_2D)
 
         # Test the gradient with respect to pi
-        dcdp_numerical = np.zeros_like(pi)
+        dcdpj_numerical = np.zeros_like(p[js,:])
 
-        for d in range(len(pi)):
+        for (jix, j) in enumerate(js):
+
             eps = 1.0e-6
-            pi_plus = pi.copy()
-            pi_minus = pi.copy()
-            pi_plus[d] += eps
-            pi_minus[d] -= eps
-            c_plus = pbf.incompressibilityConstraint(pi_plus, pjs, rho0, m, h, pbf.spiky_2D)
-            c_minus = pbf.incompressibilityConstraint(pi_minus, pjs, rho0, m, h, pbf.spiky_2D)
-            dcdp = (c_plus - c_minus) / (2.0 * eps)
-            dcdp_numerical[d] = dcdp
-        assert np.allclose(dcdp_numerical, dcdpi)
 
-        dcdpj_numerical = np.zeros_like(pjs)
-        for k in range(len(pjs)):
-            for d in range(pjs.shape[1]):
-                pjs_plus = pjs.copy()
-                pjs_minus = pjs.copy()
-                eps = 1.0e-6
-                pjs_plus[k, d] += eps
-                pjs_minus[k, d] -= eps
-                c_plus = pbf.incompressibilityConstraint(pi, pjs_plus, rho0, m, h, pbf.spiky_2D)
-                c_minus = pbf.incompressibilityConstraint(pi, pjs_minus, rho0, m, h, pbf.spiky_2D)            
+            for d in range(2):
+                p_plus = p.copy()
+                p_minus = p.copy()
+                p_plus[j, d] += eps
+                p_minus[j, d] -= eps
+
+                c_plus = pbf.incompressibilityConstraint(i, js, p_plus, rho0, m, h, pbf.spiky_2D)
+                c_minus = pbf.incompressibilityConstraint(i, js, p_minus, rho0, m, h, pbf.spiky_2D)
                 dcdp = (c_plus - c_minus) / (2.0 * eps)
-                dcdpj_numerical[k, d] = dcdp
+                dcdpj_numerical[jix, d] = dcdp
         assert np.allclose(dcdpj_numerical, dcdpj)
 
+def get_positions(num_particles_x, num_particles_y, dx, jitter):
+
+    p = pbf.jittered_grid(num_particles_x, num_particles_y, dx, jitter)
+    return p
+
+def test_neighbors():
+    dim = 2
+    num_particles_x = 5
+    num_particles_y = 5
+    num_particles = num_particles_x * num_particles_y
+    dx = 0.7
+    p = get_positions(num_particles_x, num_particles_y, dx, dx * .2)
+    h = 1.8 * dx
+
+    for i in range(num_particles):
+        actual_neighbors = []
+        pi = p[i,:]
+        for j in range(num_particles):
+            pj = p[j,:]
+            r = np.linalg.norm(pi - pj)
+            if (r < h):
+                actual_neighbors.append(j)
+        
+        neighbors = pbf.getNeighborsWithinDistance(i, p, h)
+        actual_neighbors.sort()
+        neighbors.sort()
+        assert neighbors == actual_neighbors
+
+def test_constraint():
+    m = np.random.rand()
+
+    
 def run_tests():
     test_kernel_coefficients_2D()
     test_spiky_gradient()
+    test_neighbors()
     test_constraint_gradient()
+
 
 if __name__ == "__main__":
     run_tests()

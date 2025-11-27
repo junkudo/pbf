@@ -1,6 +1,8 @@
 import numpy as np
 import random
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("tkagg")
 from line_profiler import profile
 from scipy.spatial import KDTree
 from collections import defaultdict
@@ -24,14 +26,15 @@ def dspikey_2D(r, h):
     return np.where((r <= 0.0) | (r > h), 0.0, dwdr)
 
 @profile
-def sphDensity2D(pi  : np.ndarray,  # shape (d)
-               pjs : np.ndarray,  # shape (N,d)
+def sphDensity2D(i, js, p, 
                m : float,
                h : float,
                kernel_func = poly6_2D): # Kernel function of the form kernel_func(r,h)
     # Calculate the density approximation using SPH kernels
     # \sum_j m_j W(pi - pj, h)
     density = 0.0
+    pi = p[i,:]
+    pjs = p[js, :]
     r_vec = pi - pjs
     r = np.linalg.norm(r_vec, axis=1)
     density = (m * kernel_func(r,h)).sum(axis=0)
@@ -41,52 +44,40 @@ def sphDensity2D(pi  : np.ndarray,  # shape (d)
     #     density += m * kernel_func(r, h)
 
     # Add i the self-particle term
-    density += m * kernel_func(0, h)
+    # density += m * kernel_func(0, h)
     return density
 
 @profile
-def incompressibilityConstraint(pi : np.ndarray, # shape (d)
-                                pjs : np.ndarray, # shape (N,d)
+def incompressibilityConstraint(i, js, p,
                                 rho0 : float,
                                 m : float,
                                 h : float,
                                 kernel_func) :
-    rho = sphDensity2D(pi, pjs, m, h, kernel_func)
+    rho = sphDensity2D(i, js, p, m, h, kernel_func)
     return rho / rho0 - 1
 
 @profile
-def constraintGradient(pi : np.ndarray,
-                       pjs : np.ndarray,
+def constraintGradient(i, js, p,
                        rho0 : float,
                        m : float,
                        h : float,
                        dkernel_func) : 
-    # Calculate gradient of the ith constraint with respect to the position of ith particle
-    # and its N neighbors
-    #gradient_i = np.zeros_like(pi)
-    # gradient_j = np.zeros_like(pjs)
-
-    # # grad_i = \sum_j grad_rij W(pi - pj) 
-    # for pj in pjs:
-    #     rij = pi - pj
-    #     r = np.linalg.norm(rij)
-    #     # We assume r != 0.0 as the neighbors do not include self
-    #     # (and the self term has no sensitiivty with respect to pi)
-
-
-    # grad_j = - grad_rij W()
+    # Calculate gradient of the ith constraint with respect to the position of j neighbors
+    pi = p[i,:]
+    pjs = p[js,:]
     rij = pi - pjs
     r = np.linalg.norm(rij, axis=1)
-    gradient_i = (dkernel_func(r, h)[:, None] * m / rho0 * rij / r[:, None]).sum(axis = 0)
-    gradient_i *= 1.0 / rho0
 
-    gradient_j = -dkernel_func(r,h)[:, None] * m / rho0 * rij / r[:, None]
-    # for (j, pj) in enumerate(pjs):
-    #     rij = pi - pj
-    #     r = np.linalg.norm(rij)
-    #     gradient_j[j, :] = -dkernel_func(r,h) * m / rho0 * rij / r
+    # Calculate dcdpi
 
-    return (gradient_i, gradient_j)
+    neighbor_ix = np.where(np.array(js) != i)
+    self_ix = np.where(np.array(js) == i)
+    dcdpj = np.zeros_like(pjs)
+    dcdpj[self_ix, :] = np.squeeze((dkernel_func(r[neighbor_ix], h)[:, None] * m / rho0 * rij[neighbor_ix,:] / r[neighbor_ix, None])).sum(axis=0) / rho0
+    dcdpj[neighbor_ix, :] = -dkernel_func(r[neighbor_ix],h)[:, None] * m / rho0 * rij[neighbor_ix,:] / r[neighbor_ix, None]
+    return  dcdpj
+
+
 
 
 def generate_particles_2d(width, height, dx):
@@ -125,8 +116,8 @@ def getNeighborsWithinDistance(i : int, p : np.ndarray, d : float):
     pi = p[i,:]
     neighbors = []
     for j in range(p.shape[0]):
-        if i == j:
-            continue
+        # if i == j:
+        #     continue
         pj = p[j,:]
         mag = np.linalg.norm(pi - pj)
 
@@ -225,7 +216,7 @@ def run():
 
     time = 0
 
-    for simulationStep in range(20):
+    for simulationStep in range(40):
         time += deltaT
 
         v = updateVelocity(v, f, deltaT, m)
@@ -239,42 +230,26 @@ def run():
         for i in range(num_active_particles):
             neighbors.append(get_neighbors(i, pstar, grid, h))
 
-        # # print(neighbors)
-        # neighbors2 = []
-        # for i in range(num_active_particles):
-        #     js = getNeighborsWithinDistance(i, pstar, h)
-        #     neighbors2.append(js)
-
-        niter = 30
+        niter = 20
         for solverIter in range(niter):
             deltap = np.zeros_like(p)
             avgAbsCi = 0
 
             for i in range(num_active_particles):
-
-                # js = [neighbors[i, j] for j in range(30) if distances[i, j] < h and distances[i,j] > 0.0]
                 js = neighbors[i]
-                # js.sort()
-                # jun = np.all(js == neighbors2[i])
-                # if (not jun):
-                #     print(i)
-                #     print(js)
-                #     print(neighbors2[i])
-                #     raise KeyError
 
-                
                 # For each particle, calculate lagrange multiplier
                 pi = pstar[i, :]
                 pjs = pstar[js,:]
 
-                ci = incompressibilityConstraint(pi, pjs, rho0, m, h, poly6_2D)
+                ci = incompressibilityConstraint(i, js, pstar, rho0, m, h, poly6_2D)
+
 
                 avgAbsCi += np.abs(ci)
-                [gradici, gradjci] = constraintGradient(pi, pjs, rho0, m, h, dspikey_2D)
+                gradjci = constraintGradient(i, js, pstar, rho0, m, h, dspikey_2D)
 
                 # Sum of the squared norms of the gradients
                 normSqed = 0.0
-                normSqed += np.dot(gradici, gradici)
                 for grad in gradjci:
                     normSqed += np.dot(grad,grad)
                 eps = 1.0e-6
@@ -306,6 +281,7 @@ def run():
                 q = 0.2 * h
                 n = 4
                 scorr = -k * np.pow((poly6_2D(r, h) / poly6_2D(q, h)), n)
+
                 deltap[i , :] = (m / rho0 * (lambdai + lambdajs[:,None] + scorr[:,None]) * gradW).sum(axis=0)
 
 
